@@ -1,5 +1,6 @@
 import express, { Request, Response } from "express";
 import cors from "cors";
+import { prisma } from "./lib/db";
 
 const app = express();
 
@@ -12,13 +13,6 @@ type LeadStatus =
   | "Proposal Sent"
   | "Closed-Won"
   | "Closed-Lost";
-
-interface Lead {
-  name: string;
-  email: string;
-  status: LeadStatus;
-  createdAt: string;
-}
 
 interface CreateLeadDTO {
   name: string;
@@ -34,16 +28,6 @@ const VALID_STATUS: LeadStatus[] = [
   "Closed-Lost",
 ];
 
-// Initial data (Will reset every time the serverless function restarts)
-const leads: Lead[] = [
-  {
-    name: "John Doe",
-    email: "john@example.com",
-    status: "New",
-    createdAt: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
-  },
-];
-
 app.get("/", (_req: Request, res: Response) => {
   res
     .type("html")
@@ -52,39 +36,45 @@ app.get("/", (_req: Request, res: Response) => {
     );
 });
 
-app.get("/leads", (_req: Request, res: Response) => {
-  const sortedLeads = [...leads].sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-  );
-  res.json(sortedLeads);
+app.get("/leads", async (_req, res) => {
+  try {
+    const leads = await prisma.lead.findMany({
+      orderBy: { createdAt: "desc" },
+    });
+    res.json(leads);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch leads" });
+  }
 });
 
-// Fixed POST route syntax
-app.post("/leads", (req: Request<{}, {}, CreateLeadDTO>, res: Response) => {
-  const { name, email, status } = req.body;
+app.post(
+  "/leads",
+  async (req: Request<{}, {}, CreateLeadDTO>, res: Response) => {
+    const { name, email, status } = req.body;
 
-  if (!name || !email) {
-    return res.status(400).json({ error: "Name and email are required" });
-  }
+    if (!name || !email) {
+      return res.status(400).json({ error: "Name and email are required" });
+    }
 
-  if (!VALID_STATUS.includes(status)) {
-    return res.status(400).json({ error: "Invalid status value" });
-  }
+    if (!VALID_STATUS.includes(status)) {
+      return res.status(400).json({ error: "Invalid status value" });
+    }
 
-  const existing = leads.find((l) => l.email === email);
-  if (existing) {
-    return res.status(400).json({ error: "Email must be unique" });
-  }
+    try {
+      const lead = await prisma.lead.create({
+        data: {
+          name,
+          email,
+          status,
+        },
+      });
 
-  const newLead: Lead = {
-    name,
-    email,
-    status,
-    createdAt: new Date().toISOString(),
-  };
-
-  leads.push(newLead);
-  return res.status(201).json(newLead);
-});
+      res.status(201).json(lead);
+    } catch (err) {
+      // This usually triggers if the email @unique constraint is violated
+      res.status(400).json({ error: "Email must be unique" });
+    }
+  },
+);
 
 export default app;
